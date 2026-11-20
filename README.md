@@ -33,7 +33,7 @@ End-to-end аналитика маркетплейса Olist. Проект де�
 Все запросы валидированы в PGLite и адаптированы для работы в Preset.
 
 **1. Динамика выручки и заказов (Line Chart)**
-
+```
 SELECT 
     TO_CHAR(o.order_purchase_timestamp::TIMESTAMP, 'YYYY-MM') AS month,
     COUNT(DISTINCT o.order_id) AS orders_count,
@@ -43,6 +43,7 @@ LEFT JOIN order_items AS oi ON o.order_id = oi.order_id
 WHERE o.order_status = 'delivered'
 GROUP BY 1
 ORDER BY 1;
+```
 
 **2. Топ-10 категорий товаров (Bar Chart)**
 
