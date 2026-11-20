@@ -33,7 +33,8 @@ End-to-end аналитика маркетплейса Olist. Проект де�
 Все запросы валидированы в PGLite и адаптированы для работы в Preset.
 
 **1. Динамика выручки и заказов (Line Chart)**
-sql ```
+
+```sql
 SELECT 
     TO_CHAR(o.order_purchase_timestamp::TIMESTAMP, 'YYYY-MM') AS month,
     COUNT(DISTINCT o.order_id) AS orders_count,
@@ -47,6 +48,7 @@ ORDER BY 1;
 
 **2. Топ-10 категорий товаров (Bar Chart)**
 
+```sql
 SELECT
     COALESCE(t.product_category_name_english, p.product_category_name) AS category,
     COUNT(*) AS items_sold,
@@ -58,9 +60,11 @@ LEFT JOIN product_category_name_translation t
 GROUP BY 1
 ORDER BY revenue DESC
 LIMIT 10;
+```
 
 **3. Продажи по штатам (Bar/Map Chart)**
 
+```sql
 SELECT
     c.customer_state AS state,
     COUNT(DISTINCT o.order_id) AS orders_count,
@@ -71,9 +75,11 @@ JOIN order_items oi ON o.order_id = oi.order_id
 WHERE o.order_status = 'delivered'
 GROUP BY 1
 ORDER BY revenue DESC;
+```
 
 **4. Способы оплаты (Pie Chart)**
 
+```sql
 SELECT
     payment_type,
     COUNT(*) AS payments_count,
@@ -81,18 +87,22 @@ SELECT
 FROM order_payments
 GROUP BY 1
 ORDER BY total_value DESC;
+```
 
 **5. Общие KPI (Big Number)**
 
+```sql
 SELECT
     COUNT(DISTINCT o.order_id) AS total_orders,
     ROUND(SUM(oi.price + oi.freight_value)::NUMERIC, 2) AS total_revenue
 FROM orders o
 JOIN order_items oi ON o.order_id = oi.order_id
 WHERE o.order_status = 'delivered';
+```
 
 **6. Когортный анализ Retention (Pivot Table)**
 
+```sql
 WITH first_orders AS (
     SELECT 
         c.customer_unique_id,
@@ -124,7 +134,7 @@ FROM cohorts co
 JOIN orders_activity oa ON co.customer_unique_id = oa.customer_unique_id
 GROUP BY 1, 2
 ORDER BY 1, 2;
-
+```
 ---
 
 ## 📂 Структура репозитория
