@@ -17,7 +17,8 @@ End-to-end аналитика маркетплейса Olist. Проект де�
 1. **Подготовка данных:** Загружено 9 датасетов в SQL-песочницу SQLiteOnline (на базе PGLite).
 2. **Расчет бизнес-метрик:** Написаны SQL-запросы для расчета выручки (Revenue), количества заказов, среднего чека (AOV), а также динамики по месяцам.
 3. **Продуктовая аналитика:** Реализован когортный анализ (Retention) для оценки удержания клиентов и частоты повторных покупок.
-4. **Визуализация:** В облачном Superset (Preset) собран интерактивный дашборд с использованием графиков Line, Bar, Pie и Big Number.
+4. **Анализ селлеров:** Проведен Парето-анализ (правило 80/20) для выявления продавцов, приносящих основную долю выручки.
+5. **Визуализация:** В облачном Superset (Preset) собран интерактивный дашборд с использованием графиков Line, Bar, Pie и Big Number.
 
 ## 📈 Ключевые инсайты
 
@@ -25,6 +26,7 @@ End-to-end аналитика маркетплейса Olist. Проект де�
 * **География:** Основная доля продаж сконцентрирована в штате Сан-Паулу (SP). Однако в северных регионах наблюдается высокое время доставки, что может негативно влиять на клиентский опыт.
 * **Способы оплаты:** Более 73% клиентов предпочитают оплату кредитными картами, что подтверждает важность надежной интеграции с банковскими шлюзами.
 * **Retention:** Основная масса клиентов совершает повторные покупки в первые 1-2 месяца после первого заказа, после чего наблюдается естественный отток (характерно для e-commerce).
+* **Парето (селлеры):** Топ-20% продавцов генерируют ~80% всей выручки платформы, что указывает на высокую зависимость маркетплейса от узкого круга ключевых партнеров.
 
 ---
 
@@ -34,7 +36,6 @@ End-to-end аналитика маркетплейса Olist. Проект де�
 
 **1. Динамика выручки и заказов (Line Chart)**
 
-```sql
 SELECT 
     TO_CHAR(o.order_purchase_timestamp::TIMESTAMP, 'YYYY-MM') AS month,
     COUNT(DISTINCT o.order_id) AS orders_count,
@@ -44,11 +45,9 @@ LEFT JOIN order_items AS oi ON o.order_id = oi.order_id
 WHERE o.order_status = 'delivered'
 GROUP BY 1
 ORDER BY 1;
-```
 
 **2. Топ-10 категорий товаров (Bar Chart)**
 
-```sql
 SELECT
     COALESCE(t.product_category_name_english, p.product_category_name) AS category,
     COUNT(*) AS items_sold,
@@ -60,11 +59,9 @@ LEFT JOIN product_category_name_translation t
 GROUP BY 1
 ORDER BY revenue DESC
 LIMIT 10;
-```
 
 **3. Продажи по штатам (Bar/Map Chart)**
 
-```sql
 SELECT
     c.customer_state AS state,
     COUNT(DISTINCT o.order_id) AS orders_count,
@@ -75,11 +72,9 @@ JOIN order_items oi ON o.order_id = oi.order_id
 WHERE o.order_status = 'delivered'
 GROUP BY 1
 ORDER BY revenue DESC;
-```
 
 **4. Способы оплаты (Pie Chart)**
 
-```sql
 SELECT
     payment_type,
     COUNT(*) AS payments_count,
@@ -87,22 +82,18 @@ SELECT
 FROM order_payments
 GROUP BY 1
 ORDER BY total_value DESC;
-```
 
 **5. Общие KPI (Big Number)**
 
-```sql
 SELECT
     COUNT(DISTINCT o.order_id) AS total_orders,
     ROUND(SUM(oi.price + oi.freight_value)::NUMERIC, 2) AS total_revenue
 FROM orders o
 JOIN order_items oi ON o.order_id = oi.order_id
 WHERE o.order_status = 'delivered';
-```
 
 **6. Когортный анализ Retention (Pivot Table)**
 
-```sql
 WITH first_orders AS (
     SELECT 
         c.customer_unique_id,
@@ -134,12 +125,40 @@ FROM cohorts co
 JOIN orders_activity oa ON co.customer_unique_id = oa.customer_unique_id
 GROUP BY 1, 2
 ORDER BY 1, 2;
-```
+
+**7. Парето-анализ селлеров (Bar Chart)**
+
+WITH seller_revenue AS (
+    SELECT 
+        oi.seller_id,
+        SUM(oi.price + oi.freight_value) AS total_revenue
+    FROM order_items oi
+    JOIN orders o ON oi.order_id = o.order_id
+    WHERE o.order_status = 'delivered'
+    GROUP BY oi.seller_id
+),
+ranked_sellers AS (
+    SELECT 
+        seller_id,
+        total_revenue,
+        NTILE(5) OVER (ORDER BY total_revenue DESC) AS quintile
+    FROM seller_revenue
+)
+SELECT 
+    CASE 
+        WHEN quintile = 1 THEN 'Top 20%'
+        ELSE 'Остальные 80%'
+    END AS seller_segment,
+    COUNT(seller_id) AS sellers_count,
+    ROUND(SUM(total_revenue)::NUMERIC, 2) AS revenue
+FROM ranked_sellers
+GROUP BY 1
+ORDER BY revenue DESC;
+
 ---
 
 ## 📂 Структура репозитория
 
-```
 olist-e-commerce-analytics/
 │
 ├── README.md               # Главный файл с описанием проекта
@@ -149,14 +168,15 @@ olist-e-commerce-analytics/
 │   ├── 03_sales_by_state.sql
 │   ├── 04_payment_types.sql
 │   ├── 05_kpi_totals.sql
-│   └── 06_retention_cohorts.sql
+│   ├── 06_retention_cohorts.sql
+│   └── 07_seller_pareto.sql
 ├── /dashboards             # Скриншоты дашбордов из Preset
 │   ├── overview.png
 │   ├── geography.png
 │   └── retention.png
 └── /data                   # Описание источника данных
     └── dataset_description.md
-```
+
 ---
 
 ## 🚀 Как запустить проект
