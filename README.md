@@ -37,18 +37,18 @@ graph TD
 Гипотеза: наличие рассрочки стимулирует и рост AOV, и объём заказов.
 
 ````sql
-WITH order_values AS (
+WITH order_items_agg AS (
     SELECT
-        o.order_id,
-        SUM(oi.price::DECIMAL) AS total_price
-    FROM orders o
-    JOIN order_items oi ON o.order_id = oi.order_id
-    WHERE o.order_status = 'delivered'
-    GROUP BY o.order_id
+        oi.order_id,
+        SUM(oi.price::DECIMAL) AS total_goods,
+        SUM(oi.freight_value::DECIMAL) AS total_freight
+    FROM order_items oi
+    GROUP BY oi.order_id
 ),
-order_installments AS (
+order_payments_agg AS (
     SELECT
         op.order_id,
+        SUM(op.payment_value::DECIMAL) AS total_paid,
         MAX(CASE WHEN op.payment_installments > 1 THEN 1 ELSE 0 END) AS has_installments,
         MAX(op.payment_installments) AS max_installments
     FROM order_payments op
@@ -56,24 +56,32 @@ order_installments AS (
 ),
 order_level AS (
     SELECT
-        ov.order_id,
-        ov.total_price,
-        oi.has_installments,
-        oi.max_installments
-    FROM order_values ov
-    JOIN order_installments oi ON ov.order_id = oi.order_id
+        o.order_id,
+        oi.total_goods,
+        oi.total_freight,
+        op.total_paid,
+        op.has_installments,
+        op.max_installments
+    FROM orders o
+    JOIN order_items_agg oi ON o.order_id = oi.order_id
+    JOIN order_payments_agg op ON o.order_id = op.order_id
+    WHERE o.order_status = 'delivered'
 ),
 totals AS (
-    SELECT SUM(total_price) AS market_revenue, COUNT(*) AS market_orders
+    SELECT
+        SUM(total_paid) AS market_revenue,
+        COUNT(*) AS market_orders
     FROM order_level
 )
 SELECT
     CASE WHEN has_installments = 1 THEN 'С рассрочкой' ELSE 'Без рассрочки' END AS installment_group,
     COUNT(*) AS orders_count,
     ROUND(COUNT(*) * 100.0 / (SELECT market_orders FROM totals), 1) AS orders_share_pct,
-    ROUND(SUM(total_price), 2) AS total_revenue,
-    ROUND(SUM(total_price) * 100.0 / (SELECT market_revenue FROM totals), 1) AS revenue_share_pct,
-    ROUND(AVG(total_price), 2) AS avg_aov,
+    ROUND(SUM(total_paid), 2) AS total_revenue,
+    ROUND(SUM(total_paid) * 100.0 / (SELECT market_revenue FROM totals), 1) AS revenue_share_pct,
+    ROUND(AVG(total_paid), 2) AS avg_aov,
+    ROUND(AVG(total_goods), 2) AS avg_goods_value,
+    ROUND(AVG(total_freight), 2) AS avg_freight_value,
     ROUND(AVG(max_installments), 1) AS avg_installments
 FROM order_level
 GROUP BY has_installments
@@ -82,30 +90,25 @@ ORDER BY has_installments DESC;
 
 Результат:
 
-| installment_group | orders_count | orders_share_pct | total_revenue | revenue_share_pct | avg_aov | avg_installments |
-|---|---:|---:|---:|---:|---:|---:|
-| **С рассрочкой** | 49 661 | 51.5% | 8 542 651.90 | 64.6% | 172.02 | 4.7 |
-| **Без рассрочки** | 46 816 | 48.5% | 4 678 711.24 | 35.4% | 99.94 | 1.0 |
-| **Итого** | 96 477 | 100% | 13 221 363.14 | 100% | — | — |
 
-Инсайт: заказы с рассрочкой имеют AOV на 72% выше и составляют 65% выручки.
+Инсайт: заказы с рассрочкой имеют AOV на % выше и составляют % выручки.
 
 
 2. Когортный анализ: лояльные vs нелояльные
 Гипотеза: качество первого опыта (скорость первой доставки) — ключевой фактор повторного заказа.
 ````sql
-WITH order_totals AS (
+WITH order_payments_agg AS (
     SELECT
-        oi.order_id,
-        SUM(oi.price::DECIMAL) AS order_total
-    FROM order_items oi
-    GROUP BY oi.order_id
+        op.order_id,
+        SUM(op.payment_value::DECIMAL) AS order_total_paid
+    FROM order_payments op
+    GROUP BY op.order_id
 ),
 customer_orders AS (
     SELECT
         c.customer_unique_id,
         o.order_id,
-        ot.order_total,
+        opa.order_total_paid AS order_total,
         EXTRACT(DAY FROM (
             o.order_delivered_customer_date::timestamp
             - o.order_purchase_timestamp::timestamp
@@ -117,7 +120,7 @@ customer_orders AS (
         ) AS order_rank
     FROM orders o
     JOIN customers c ON o.customer_id = c.customer_id
-    JOIN order_totals ot ON o.order_id = ot.order_id
+    JOIN order_payments_agg opa ON o.order_id = opa.order_id
     WHERE o.order_status = 'delivered'
       AND o.order_delivered_customer_date IS NOT NULL
       AND o.order_delivered_customer_date <> ''
@@ -156,11 +159,26 @@ ORDER BY (total_orders = 1);
 Гипотеза: выручка сконцентрирована у узкой группы селлеров, что создаёт системный риск.
 
 ````sql
-WITH seller_revenue AS (
+WITH order_payments_agg AS (
+    SELECT
+        op.order_id,
+        SUM(op.payment_value::DECIMAL) AS order_paid
+    FROM order_payments op
+    GROUP BY op.order_id
+),
+order_items_agg AS (
+    SELECT
+        oi.order_id,
+        oi.seller_id,
+        SUM(oi.price::DECIMAL) AS item_price
+    FROM order_items oi
+    GROUP BY oi.order_id, oi.seller_id
+),
+seller_revenue AS (
     SELECT
         s.seller_id,
         s.seller_state,
-        SUM(oi.price::DECIMAL) AS total_revenue,
+        SUM(oi.item_price) AS total_goods_revenue,
         COUNT(DISTINCT o.order_id) AS orders_count,
         AVG(
             EXTRACT(DAY FROM (
@@ -169,7 +187,7 @@ WITH seller_revenue AS (
             ))
         ) AS avg_delivery_days
     FROM sellers s
-    JOIN order_items oi ON s.seller_id = oi.seller_id
+    JOIN order_items_agg oi ON s.seller_id = oi.seller_id
     JOIN orders o ON oi.order_id = o.order_id
     WHERE o.order_status = 'delivered'
       AND o.order_delivered_customer_date IS NOT NULL
@@ -181,15 +199,15 @@ ranked AS (
     SELECT
         seller_id,
         seller_state,
-        total_revenue,
+        total_goods_revenue,
         orders_count,
         avg_delivery_days,
-        NTILE(5) OVER (ORDER BY total_revenue DESC) AS revenue_quintile
+        NTILE(5) OVER (ORDER BY total_goods_revenue DESC) AS revenue_quintile
     FROM seller_revenue
 ),
 totals AS (
     SELECT
-        SUM(total_revenue) AS market_total,
+        SUM(total_goods_revenue) AS market_total,
         COUNT(*) AS market_sellers
     FROM ranked
 ),
@@ -197,7 +215,7 @@ grouped AS (
     SELECT
         revenue_quintile,
         COUNT(*) AS sellers_count,
-        SUM(total_revenue) AS group_revenue,
+        SUM(total_goods_revenue) AS group_revenue,
         AVG(avg_delivery_days) AS avg_delivery_days,
         SUM(CASE WHEN seller_state = 'SP' THEN 1 ELSE 0 END) AS sp_sellers
     FROM ranked
@@ -234,11 +252,19 @@ ORDER BY revenue_quintile;
 Гипотеза: продавцы сконцентрированы в одном штате, что усиливает логистический риск.
 
 ````sql
-WITH seller_revenue AS (
+WITH order_items_agg AS (
+    SELECT
+        oi.order_id,
+        oi.seller_id,
+        SUM(oi.price::DECIMAL) AS item_price
+    FROM order_items oi
+    GROUP BY oi.order_id, oi.seller_id
+),
+seller_revenue AS (
     SELECT
         s.seller_id,
         s.seller_state,
-        SUM(oi.price::DECIMAL) AS total_revenue,
+        SUM(oi.item_price) AS total_revenue,
         AVG(
             EXTRACT(DAY FROM (
                 o.order_delivered_customer_date::timestamp
@@ -246,7 +272,7 @@ WITH seller_revenue AS (
             ))
         ) AS avg_delivery_days
     FROM sellers s
-    JOIN order_items oi ON s.seller_id = oi.seller_id
+    JOIN order_items_agg oi ON s.seller_id = oi.seller_id
     JOIN orders o ON oi.order_id = o.order_id
     WHERE o.order_status = 'delivered'
       AND o.order_delivered_customer_date IS NOT NULL
