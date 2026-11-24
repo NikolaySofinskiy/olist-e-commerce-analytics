@@ -38,30 +38,43 @@ graph TD
 
 ```sql
 WITH order_values AS (
-    SELECT o.order_id, SUM(oi.price::DECIMAL) AS total_price
+    SELECT
+        o.order_id,
+        SUM(oi.price::DECIMAL) AS total_price
     FROM orders o
     JOIN order_items oi ON o.order_id = oi.order_id
     WHERE o.order_status = 'delivered'
     GROUP BY o.order_id
 ),
-payment_stats AS (
-    SELECT 
-        op.payment_type,
-        COUNT(DISTINCT op.order_id) AS orders_count,
-        ROUND(AVG(ov.total_price), 2) AS avg_aov,
-        ROUND(AVG(op.payment_installments::DECIMAL), 1) AS avg_installments
+order_installments AS (
+    -- флаг "есть ли в заказе хотя бы одна платёжная строка с рассрочкой"
+    SELECT
+        op.order_id,
+        MAX(CASE WHEN op.payment_installments > 1 THEN 1 ELSE 0 END) AS has_installments,
+        MAX(op.payment_installments) AS max_installments
     FROM order_payments op
-    JOIN order_values ov ON op.order_id = ov.order_id
-    GROUP BY op.payment_type
+    GROUP BY op.order_id
+),
+order_level AS (
+    SELECT
+        ov.order_id,
+        ov.total_price,
+        oi.has_installments,
+        oi.max_installments
+    FROM order_values ov
+    JOIN order_installments oi ON ov.order_id = oi.order_id
 )
-SELECT 
-    payment_type,
-    orders_count,
-    avg_aov,
-    avg_installments,
-    ROUND((avg_aov / (SELECT AVG(avg_aov) FROM payment_stats) - 1) * 100, 2) AS aov_diff_from_avg_pct
-FROM payment_stats
-ORDER BY avg_aov DESC;
+SELECT
+    CASE WHEN has_installments = 1 THEN 'с рассрочкой' ELSE 'без рассрочки' END AS installment_group,
+    COUNT(*) AS orders_count,
+    ROUND(AVG(total_price), 2) AS avg_aov,
+    ROUND(AVG(max_installments), 1) AS avg_max_installments,
+    ROUND(
+        COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1
+    ) AS orders_share_pct
+FROM order_level
+GROUP BY has_installments
+ORDER BY has_installments DESC;
 ```
 
 Инсайт: Заказы с рассрочкой (credit_card) увеличивают AOV на 14,6% по сравнению со средним по рынку, подтверждая эффективность финтех-инструментов для роста чека без каннибализации объема заказов.
