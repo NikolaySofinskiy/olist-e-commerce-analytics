@@ -37,7 +37,7 @@ graph TD
 
 ```sql
 WITH order_values AS (
-    SELECT o.order_id, SUM(oi.price) AS total_price
+    SELECT o.order_id, SUM(oi.price::DECIMAL) AS total_price
     FROM orders o
     JOIN order_items oi ON o.order_id = oi.order_id
     WHERE o.order_status = 'delivered'
@@ -48,7 +48,7 @@ payment_stats AS (
         op.payment_type,
         COUNT(DISTINCT op.order_id) AS orders_count,
         ROUND(AVG(ov.total_price), 2) AS avg_aov,
-        ROUND(AVG(op.payment_installments), 1) AS avg_installments
+        ROUND(AVG(op.payment_installments::DECIMAL), 1) AS avg_installments
     FROM order_payments op
     JOIN order_values ov ON op.order_id = ov.order_id
     GROUP BY op.payment_type
@@ -58,7 +58,7 @@ SELECT
     orders_count,
     avg_aov,
     avg_installments,
-    ROUND((avg_aov / (SELECT AVG(avg_aov) FROM payment_stats) - 1) * 100, 1) AS aov_diff_from_avg_pct
+    ROUND((avg_aov / (SELECT AVG(avg_aov) FROM payment_stats) - 1) * 100, 2) AS aov_diff_from_avg_pct
 FROM payment_stats
 ORDER BY avg_aov DESC;
 ```
